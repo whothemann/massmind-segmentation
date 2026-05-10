@@ -1,0 +1,34 @@
+# --- Project artefacts ----------------------------------------------------
+
+# Raw dataset (downloaded by scripts/download.py; not committed)
+data/massmind/
+data/*.zip
+
+# Regenerable caches (created by src.stats / the exploration notebook)
+data/splits/stats.json
+data/splits/class_pixel_counts.json
+
+# Training run outputs (checkpoints are ~95MB each; HF/Colab is the place for these)
+runs/
+
+# --- Python ---------------------------------------------------------------
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Editors / OS ---------------------------------------------------------
+
+.vscode/
+.idea/
+.DS_Store
+._*
+
+# --- Notebook outputs -----------------------------------------------------
+# Outputs ARE committed by default: they're useful for assignment submission
+# (graders can see plots without re-running). Uncomment to strip them:
+# *.ipynb
