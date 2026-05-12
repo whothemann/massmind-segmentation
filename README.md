@@ -32,34 +32,6 @@ existing model trained on the same data. We're delivering this as:
 | Threshold sweep (τ = 0.3 and 0.6) for rare-class F1 | ⏳ |
 | Final writeup | ⏳ |
 
-## Design rationale — why a hand-built model (and not SegFormer)
-
-An early candidate for the custom model was a pretrained SegFormer (MiT-B2,
-ADE20K-pretrained, single-channel-adapted). We rejected it for three
-converging reasons:
-
-1. **Instructor guidance.** When asked directly, the course instructor stated a
-   preference for hand-implemented PyTorch layers over fine-tuning a foundation
-   model. A pretrained SegFormer with channel adaptation would not have
-   demonstrated the architectural design skills the assignment is meant to
-   test.
-2. **In-class demonstrator calibration.** The notebook presented in class
-   hand-builds a 4-level U-Net using `conv()` / `up_conv()` helpers and a
-   structured `nn.Module` subclass. The accompanying exercise asks students to
-   build a 4-level U-Net from scratch with no pretrained backbone. That sets
-   the expected level of work.
-3. **Assignment text.** "Propose a custom AI model" *alongside* "compare
-   against at least one existing model (e.g., U-Net+VGG)" implies the custom
-   model should be meaningfully distinct from existing models — not another
-   existing model with mild adaptation.
-
-Trade-offs we accept: no ADE20K pretraining (likely lower headline mIoU), no
-modern foundation-model fine-tuning skill development. Trade-offs we keep:
-hands-on self-attention implementation, training-from-scratch protocol
-matching the MassMIND paper, lower risk of underperforming due to the
-RGB-to-thermal domain gap, and a defensible architecture story. SegFormer
-remains a sensible future-work direction in the report.
-
 ## Tier 2 architecture
 
 A 4-level encoder/decoder U-Net (preserving the demonstrator's base
