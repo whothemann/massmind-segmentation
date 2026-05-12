@@ -1,0 +1,47 @@
+=== Training augmentation A -> runs/unet_vgg16_augA_1778542181 ===
+2026-05-11 23:29:53,898 INFO __main__: Device: cuda
+2026-05-11 23:29:53,902 INFO __main__: train batches=128 (n=2042)  val batches=37 (n=583)  norm: mean=0.5067 std=0.1960
+2026-05-11 23:29:55,880 INFO httpx: HTTP Request: HEAD https://huggingface.co/smp-hub/vgg16.imagenet/resolve/49d74b799006ee252b86e25acd6f1fd8ac9a99c1/config.json "HTTP/1.1 307 Temporary Redirect"
+2026-05-11 23:29:55,897 INFO httpx: HTTP Request: HEAD https://huggingface.co/api/resolve-cache/models/smp-hub/vgg16.imagenet/49d74b799006ee252b86e25acd6f1fd8ac9a99c1/config.json "HTTP/1.1 200 OK"
+2026-05-11 23:29:55,916 INFO httpx: HTTP Request: GET https://huggingface.co/api/resolve-cache/models/smp-hub/vgg16.imagenet/49d74b799006ee252b86e25acd6f1fd8ac9a99c1/config.json "HTTP/1.1 200 OK"
+2026-05-11 23:29:55,987 INFO httpx: HTTP Request: HEAD https://huggingface.co/smp-hub/vgg16.imagenet/resolve/49d74b799006ee252b86e25acd6f1fd8ac9a99c1/model.safetensors "HTTP/1.1 302 Found"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-05-11 23:29:55,987 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-05-11 23:29:56,089 INFO httpx: HTTP Request: GET https://huggingface.co/api/models/smp-hub/vgg16.imagenet/xet-read-token/49d74b799006ee252b86e25acd6f1fd8ac9a99c1 "HTTP/1.1 200 OK"
+2026-05-11 23:29:59,600 INFO src.models._adapt: Adapted first conv: in=3 -> 1, out=64, kernel=(3, 3) (channel-mean init)
+2026-05-11 23:29:59,601 INFO src.models.unet: Built U-Net+VGG16: in_channels=1, classes=7, params=23.75M, encoder_weights=imagenet
+2026-05-11 23:36:02,525 INFO __main__: epoch  1/20  train_loss=1.1134  val_loss=0.5794  mIoU=0.3961  pixel_acc=0.9265  (362.6s)
+2026-05-11 23:36:02,644 INFO __main__:   saved new best (mIoU=0.3961)
+2026-05-11 23:42:16,750 INFO __main__: epoch  2/20  train_loss=0.4531  val_loss=0.3266  mIoU=0.4417  pixel_acc=0.9416  (374.1s)
+2026-05-11 23:42:16,952 INFO __main__:   saved new best (mIoU=0.4417)
+2026-05-11 23:48:32,284 INFO __main__: epoch  3/20  train_loss=0.2700  val_loss=0.2148  mIoU=0.5135  pixel_acc=0.9577  (375.3s)
+2026-05-11 23:48:32,474 INFO __main__:   saved new best (mIoU=0.5135)
+2026-05-11 23:54:47,591 INFO __main__: epoch  4/20  train_loss=0.1887  val_loss=0.1581  mIoU=0.5258  pixel_acc=0.9628  (375.1s)
+2026-05-11 23:54:47,759 INFO __main__:   saved new best (mIoU=0.5258)
+2026-05-12 00:01:02,841 INFO __main__: epoch  5/20  train_loss=0.1479  val_loss=0.1316  mIoU=0.5857  pixel_acc=0.9685  (375.1s)
+2026-05-12 00:01:03,024 INFO __main__:   saved new best (mIoU=0.5857)
+2026-05-12 00:07:18,481 INFO __main__: epoch  6/20  train_loss=0.1323  val_loss=0.1178  mIoU=0.6036  pixel_acc=0.9711  (375.5s)
+2026-05-12 00:07:18,683 INFO __main__:   saved new best (mIoU=0.6036)
+2026-05-12 00:13:33,871 INFO __main__: epoch  7/20  train_loss=0.1137  val_loss=0.1260  mIoU=0.5857  pixel_acc=0.9658  (375.2s)
+2026-05-12 00:19:47,974 INFO __main__: epoch  8/20  train_loss=0.1011  val_loss=0.0996  mIoU=0.6213  pixel_acc=0.9727  (374.1s)
+2026-05-12 00:19:48,140 INFO __main__:   saved new best (mIoU=0.6213)
+2026-05-12 00:26:03,696 INFO __main__: epoch  9/20  train_loss=0.0924  val_loss=0.0950  mIoU=0.6167  pixel_acc=0.9727  (375.6s)
+2026-05-12 00:32:18,955 INFO __main__: epoch 10/20  train_loss=0.0820  val_loss=0.0833  mIoU=0.6452  pixel_acc=0.9752  (375.3s)
+2026-05-12 00:32:19,124 INFO __main__:   saved new best (mIoU=0.6452)
+2026-05-12 00:38:34,838 INFO __main__: epoch 11/20  train_loss=0.0751  val_loss=0.0802  mIoU=0.6978  pixel_acc=0.9793  (375.7s)
+2026-05-12 00:38:35,015 INFO __main__:   saved new best (mIoU=0.6978)
+2026-05-12 00:44:50,429 INFO __main__: epoch 12/20  train_loss=0.0679  val_loss=0.0763  mIoU=0.7141  pixel_acc=0.9806  (375.4s)
+2026-05-12 00:44:50,629 INFO __main__:   saved new best (mIoU=0.7141)
+2026-05-12 00:51:06,757 INFO __main__: epoch 13/20  train_loss=0.0625  val_loss=0.0727  mIoU=0.7280  pixel_acc=0.9814  (376.1s)
+2026-05-12 00:51:06,936 INFO __main__:   saved new best (mIoU=0.7280)
+2026-05-12 00:57:21,563 INFO __main__: epoch 14/20  train_loss=0.0579  val_loss=0.0703  mIoU=0.7320  pixel_acc=0.9821  (374.6s)
+2026-05-12 00:57:21,722 INFO __main__:   saved new best (mIoU=0.7320)
+2026-05-12 01:03:37,433 INFO __main__: epoch 15/20  train_loss=0.0542  val_loss=0.0706  mIoU=0.7317  pixel_acc=0.9821  (375.7s)
+2026-05-12 01:09:53,148 INFO __main__: epoch 16/20  train_loss=0.0517  val_loss=0.0669  mIoU=0.7374  pixel_acc=0.9827  (375.7s)
+2026-05-12 01:09:53,309 INFO __main__:   saved new best (mIoU=0.7374)
+2026-05-12 01:16:08,553 INFO __main__: epoch 17/20  train_loss=0.0503  val_loss=0.0665  mIoU=0.7373  pixel_acc=0.9827  (375.2s)
+2026-05-12 01:22:24,640 INFO __main__: epoch 18/20  train_loss=0.0495  val_loss=0.0650  mIoU=0.7388  pixel_acc=0.9828  (376.1s)
+2026-05-12 01:22:24,809 INFO __main__:   saved new best (mIoU=0.7388)
+2026-05-12 01:28:40,620 INFO __main__: epoch 19/20  train_loss=0.0483  val_loss=0.0662  mIoU=0.7368  pixel_acc=0.9826  (375.8s)
+2026-05-12 01:34:56,177 INFO __main__: epoch 20/20  train_loss=0.0484  val_loss=0.0650  mIoU=0.7387  pixel_acc=0.9828  (375.6s)
+2026-05-12 01:34:56,289 INFO __main__: Training complete. Best val mIoU=0.7388

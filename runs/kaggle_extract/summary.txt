@@ -1,0 +1,11 @@
+     best_epoch     mIoU  pixel_acc  iou_sky  iou_water  iou_bridge  \
+aug                                                                   
+A            18  0.73884    0.98282  0.98570    0.98958     0.71772   
+B            20  0.64276    0.97560  0.98476    0.97892     0.71937   
+C            20  0.74375    0.98331  0.98568    0.98977     0.72284   
+
+     iou_obstacle  iou_living_obs  iou_background  iou_self  
+aug                                                          
+A         0.64083             0.0         0.89284   0.94522  
+B         0.00008             0.0         0.87660   0.93956  
+C         0.66590             0.0         0.89607   0.94600  
