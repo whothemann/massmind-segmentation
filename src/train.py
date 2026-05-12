@@ -34,6 +34,7 @@ from torch.utils.data import DataLoader
 
 from .augmentations import MASK_IGNORE_INDEX, build_pipeline
 from .dataset import NUM_CLASSES, MassMINDDataset, make_collate_fn
+from .losses import FocalLoss
 from .metrics import ConfusionMatrixTracker
 from .models import build_unet_vgg16
 from .splits import load_splits
@@ -66,6 +67,9 @@ class TrainConfig:
     device: str
     seed: int
     encoder_weights: str | None
+    loss: str                  # "ce" or "focal"
+    focal_gamma: float
+    focal_alpha: float | None
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +209,19 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
+def build_criterion(cfg: TrainConfig) -> nn.Module:
+    """Build the training loss from cfg.loss."""
+    if cfg.loss == "ce":
+        return nn.CrossEntropyLoss(ignore_index=MASK_IGNORE_INDEX)
+    if cfg.loss == "focal":
+        return FocalLoss(
+            gamma=cfg.focal_gamma,
+            alpha=cfg.focal_alpha,
+            ignore_index=MASK_IGNORE_INDEX,
+        )
+    raise ValueError(f"Unknown loss {cfg.loss!r}; expected one of ce, focal.")
+
+
 def run_training(cfg: TrainConfig, output_dir: Path) -> None:
     torch.manual_seed(cfg.seed)
 
@@ -225,7 +242,7 @@ def run_training(cfg: TrainConfig, output_dir: Path) -> None:
         num_classes=NUM_CLASSES, in_channels=1, encoder_weights=cfg.encoder_weights,
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=MASK_IGNORE_INDEX)
+    criterion = build_criterion(cfg)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
     )
@@ -335,6 +352,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip ImageNet weights for the encoder (random init).",
     )
     p.add_argument(
+        "--loss",
+        choices=["ce", "focal"],
+        default="ce",
+        help="Training loss: cross-entropy (default) or focal.",
+    )
+    p.add_argument(
+        "--focal-gamma",
+        type=float,
+        default=2.0,
+        help="Focusing parameter for focal loss (only used with --loss focal).",
+    )
+    p.add_argument(
+        "--focal-alpha",
+        type=float,
+        default=None,
+        help="Scalar alpha for focal loss (None = unweighted).",
+    )
+    p.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -363,10 +398,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         device=str(device),
         seed=args.seed,
         encoder_weights=None if args.no_pretrained else "imagenet",
+        loss=args.loss,
+        focal_gamma=args.focal_gamma,
+        focal_alpha=args.focal_alpha,
     )
 
     output_dir = args.output_dir or (
-        DEFAULT_OUTPUT_DIR / f"unet_vgg16_aug{args.augmentation}_{int(time.time())}"
+        DEFAULT_OUTPUT_DIR
+        / f"unet_vgg16_aug{args.augmentation}_{args.loss}_{int(time.time())}"
     )
     run_training(cfg, output_dir)
     return 0
