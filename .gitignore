@@ -11,6 +11,10 @@ data/splits/class_pixel_counts.json
 # Training run outputs (checkpoints are ~95MB each; HF/Colab is the place for these)
 runs/
 
+# ONNX export files
+
+exports/
+
 # --- Python ---------------------------------------------------------------
 
 .venv/
