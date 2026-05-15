@@ -46,6 +46,13 @@ _VGG16_ENCODER_CHANNELS: Final[tuple[int, ...]] = (64, 128, 256, 512, 512, 512)
 # Path to the first Conv2d inside the bare SMP encoder (not wrapped in Unet).
 _VGG16_FIRST_CONV_PATH: Final[str] = "features.0"
 
+# Deep-supervision loss weights, from the README plan:
+#     L_total = L_main + 0.4 * L_aux_shallow + 0.2 * L_aux_deep
+# (shallow head sits closer to the main output, so its prediction carries more
+# weight; the deeper head is mostly a gradient-injection signal.)
+AUX_HEAD_WEIGHT_SHALLOW: Final[float] = 0.4
+AUX_HEAD_WEIGHT_DEEP: Final[float] = 0.2
+
 
 class VGG16Bottleneck(nn.Module):
     """Bottleneck wrapper for the VGG16 extension.
@@ -82,6 +89,17 @@ class VGG16UNetExt(nn.Module):
         use_attention_gates: If True, every ``Up`` block's ``skip_refine``
             slot is filled with an ``AttentionGate`` (otherwise
             ``nn.Identity``).
+        use_aux_heads: If True, attach two 1x1-conv auxiliary segmentation
+            heads at the Up2 (deeper) and Up3 (shallower) decoder outputs,
+            each bilinear-upsampled to the input resolution. The model
+            returns a tuple ``(main, aux_shallow, aux_deep)`` in training
+            mode and just ``main`` in eval mode, so the heads add **zero**
+            deployed parameters or inference cost. Combined with the
+            weighted loss in :func:`src.train.train_one_epoch`, this
+            implements deep supervision (PSPNet/UNet++ style) -- the
+            shallower head with weight 0.4 anchors the late decoder, the
+            deeper head with weight 0.2 injects gradient into the
+            bottleneck and the first decoder block.
         transformer_config: Extra kwargs forwarded to
             ``TransformerBottleneck`` (``num_heads``, ``num_layers``,
             ``mlp_ratio``, ``spatial_size``). Unused when
@@ -92,7 +110,12 @@ class VGG16UNetExt(nn.Module):
 
     Forward:
         Input  ``[B, in_channels, H, W]`` (H, W divisible by 32).
-        Output ``[B, num_classes, H, W]``.
+
+        Output:
+            * If ``use_aux_heads=False`` (default) or the model is in
+              ``eval()`` mode: a single ``[B, num_classes, H, W]`` tensor.
+            * If ``use_aux_heads=True`` AND ``training``: a tuple
+              ``(main, aux_shallow, aux_deep)`` of three same-shape tensors.
     """
 
     def __init__(
@@ -102,6 +125,7 @@ class VGG16UNetExt(nn.Module):
         encoder_weights: str | None = "imagenet",
         use_transformer_bottleneck: bool = False,
         use_attention_gates: bool = False,
+        use_aux_heads: bool = False,
         transformer_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
@@ -112,6 +136,7 @@ class VGG16UNetExt(nn.Module):
         self.in_channels = int(in_channels)
         self.use_attention_gates = bool(use_attention_gates)
         self.use_transformer_bottleneck = bool(use_transformer_bottleneck)
+        self.use_aux_heads = bool(use_aux_heads)
 
         # --- Encoder: SMP factory, built as 3-channel for clean weight loading.
         self.encoder = smp.encoders.get_encoder(
@@ -191,7 +216,24 @@ class VGG16UNetExt(nn.Module):
         self.final_conv = DoubleConv(final_mid, final_mid)
         self.out_conv = OutConv(final_mid, num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # --- Optional deep-supervision auxiliary heads.
+        # Two 1x1 convs on intermediate decoder outputs; their predictions are
+        # bilinear-upsampled to the input resolution inside forward(). Heads
+        # are only consulted in training mode, so they cost zero parameters
+        # at inference. Channel counts come from the matching Up block's
+        # out_channels (== skip_channels[i] by construction).
+        if use_aux_heads:
+            up2_out_channels = skip_channels[1]   # 512  (Up2: stride 8, deeper)
+            up3_out_channels = skip_channels[2]   # 256  (Up3: stride 4, shallower)
+            self.aux_head_deep = OutConv(up2_out_channels, num_classes)
+            self.aux_head_shallow = OutConv(up3_out_channels, num_classes)
+        else:
+            self.aux_head_deep = None
+            self.aux_head_shallow = None
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # SMP encoder returns 6 feature maps at strides [1, 2, 4, 8, 16, 32].
         feats = self.encoder(x)
         if len(feats) != 6:
@@ -202,13 +244,37 @@ class VGG16UNetExt(nn.Module):
 
         out = self.bottleneck(feats[5])
         # Decoder consumes skips deep -> shallow: feats[4], [3], [2], [1].
+        # Capture each Up output so the optional aux heads can attach to them.
+        decoder_outs: list[torch.Tensor] = []
         for up, skip in zip(
             self.ups, (feats[4], feats[3], feats[2], feats[1]), strict=True
         ):
             out = up(out, skip)
-        out = self.final_up(out)
+            decoder_outs.append(out)
+        # decoder_outs[0]=Up1 (str 16), [1]=Up2 (str 8), [2]=Up3 (str 4), [3]=Up4 (str 2)
+
+        out = self.final_up(decoder_outs[-1])
         out = self.final_conv(out)
-        return self.out_conv(out)
+        main_logits = self.out_conv(out)
+
+        # Aux heads only contribute in training mode. In eval mode the model
+        # is byte-identical to the no-aux variant for the same weights, so
+        # downstream consumers don't need to special-case anything.
+        if self.use_aux_heads and self.training:
+            target_size = main_logits.shape[-2:]
+            aux_deep = self.aux_head_deep(decoder_outs[1])     # weight 0.2
+            aux_shallow = self.aux_head_shallow(decoder_outs[2])  # weight 0.4
+            # Both heads need to land on the main-head resolution so they can
+            # share the same target mask in the loss computation.
+            aux_deep = nn.functional.interpolate(
+                aux_deep, size=target_size, mode="bilinear", align_corners=False,
+            )
+            aux_shallow = nn.functional.interpolate(
+                aux_shallow, size=target_size, mode="bilinear", align_corners=False,
+            )
+            return main_logits, aux_shallow, aux_deep
+
+        return main_logits
 
 
 def _get_module(root: nn.Module, path: str) -> nn.Module:
@@ -225,6 +291,7 @@ def build_unet_vgg16_ext(
     encoder_weights: str | None = "imagenet",
     use_transformer_bottleneck: bool = False,
     use_attention_gates: bool = False,
+    use_aux_heads: bool = False,
     transformer_config: dict[str, Any] | None = None,
 ) -> VGG16UNetExt:
     """Construct a :class:`VGG16UNetExt` and log its parameter count.
@@ -238,18 +305,21 @@ def build_unet_vgg16_ext(
         encoder_weights=encoder_weights,
         use_transformer_bottleneck=use_transformer_bottleneck,
         use_attention_gates=use_attention_gates,
+        use_aux_heads=use_aux_heads,
         transformer_config=transformer_config,
     )
     n_params = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(
         "Built VGG16UNetExt: in_channels=%d, classes=%d, weights=%s, "
-        "trans_bottleneck=%s, att_gates=%s, params=%.2fM (trainable=%.2fM)",
+        "trans_bottleneck=%s, att_gates=%s, aux_heads=%s, "
+        "params=%.2fM (trainable=%.2fM)",
         in_channels,
         num_classes,
         encoder_weights,
         use_transformer_bottleneck,
         use_attention_gates,
+        use_aux_heads,
         n_params / 1e6,
         n_trainable / 1e6,
     )

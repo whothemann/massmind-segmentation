@@ -231,6 +231,106 @@ def test_transformer_bottleneck_rejects_wrong_channels() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Deep-supervision aux heads.
+# ---------------------------------------------------------------------------
+
+
+def test_aux_heads_disabled_by_default() -> None:
+    model = build_unet_vgg16_ext(encoder_weights=None)
+    assert model.use_aux_heads is False
+    assert model.aux_head_deep is None
+    assert model.aux_head_shallow is None
+
+
+def test_aux_heads_eval_mode_returns_tensor() -> None:
+    # In eval mode, the model must return a single Tensor regardless of the
+    # use_aux_heads flag -- aux heads are training-only.
+    model = build_unet_vgg16_ext(
+        encoder_weights=None,
+        use_transformer_bottleneck=True,
+        use_aux_heads=True,
+    )
+    model.eval()
+    x = torch.randn(2, 1, 256, 256)
+    with torch.no_grad():
+        out = model(x)
+    assert isinstance(out, torch.Tensor)
+    assert out.shape == (2, 7, 256, 256)
+
+
+def test_aux_heads_train_mode_returns_tuple_of_full_resolution_logits() -> None:
+    model = build_unet_vgg16_ext(
+        encoder_weights=None,
+        use_transformer_bottleneck=True,
+        use_aux_heads=True,
+    )
+    model.train()
+    x = torch.randn(2, 1, 256, 256)
+    out = model(x)
+    assert isinstance(out, tuple) and len(out) == 3
+    main, aux_shallow, aux_deep = out
+    # All three must be at the input resolution so they share one mask in loss.
+    for t in (main, aux_shallow, aux_deep):
+        assert t.shape == (2, 7, 256, 256)
+
+
+def test_aux_heads_have_small_param_cost() -> None:
+    # Aux heads should add only ~two 1x1 convs of (in_channels x num_classes)
+    # each. For VGG16-ext that's 512*7 + 256*7 = 5376 weights + 14 biases.
+    base = build_unet_vgg16_ext(encoder_weights=None)
+    with_aux = build_unet_vgg16_ext(encoder_weights=None, use_aux_heads=True)
+    extra = sum(p.numel() for p in with_aux.parameters()) - sum(
+        p.numel() for p in base.parameters()
+    )
+    # Tight upper bound -- if this drifts up dramatically, something went wrong.
+    assert 5000 < extra < 10000, f"extra params = {extra}"
+
+
+def test_aux_heads_backprop_flows_to_all_three_heads() -> None:
+    # Run forward+backward through the deep-supervision loss combination,
+    # then verify every head's parameters received a non-zero gradient.
+    from src.train import _compute_loss
+
+    model = build_unet_vgg16_ext(
+        num_classes=3,
+        in_channels=1,
+        encoder_weights=None,
+        use_transformer_bottleneck=True,
+        use_aux_heads=True,
+    )
+    model.train()
+    x = torch.randn(1, 1, 64, 64)
+    target = torch.randint(0, 3, (1, 64, 64))
+    output = model(x)
+    loss = _compute_loss(output, target, nn.CrossEntropyLoss())
+    loss.backward()
+
+    for head in (model.out_conv, model.aux_head_shallow, model.aux_head_deep):
+        has_grad = any(
+            p.grad is not None and p.grad.abs().sum() > 0
+            for p in head.parameters()
+        )
+        assert has_grad, f"no gradient on {head.__class__.__name__}"
+
+
+def test_aux_heads_inference_is_byte_identical_with_and_without_flag() -> None:
+    # The aux heads must not perturb the main forward pass in eval mode -- the
+    # same shared params should produce the same main logits.
+    torch.manual_seed(0)
+    m_noaux = build_unet_vgg16_ext(encoder_weights=None, use_aux_heads=False)
+    torch.manual_seed(0)
+    m_aux = build_unet_vgg16_ext(encoder_weights=None, use_aux_heads=True)
+
+    m_noaux.eval()
+    m_aux.eval()
+    x = torch.randn(1, 1, 256, 256)
+    with torch.no_grad():
+        y_noaux = m_noaux(x)
+        y_aux = m_aux(x)
+    torch.testing.assert_close(y_noaux, y_aux)
+
+
 def test_full_model_backprop_runs() -> None:
     model = build_unet_vgg16_ext(
         num_classes=3,

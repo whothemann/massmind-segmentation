@@ -37,6 +37,10 @@ from .dataset import NUM_CLASSES, MassMINDDataset, make_collate_fn
 from .losses import FocalLoss
 from .metrics import ConfusionMatrixTracker
 from .models import build_unet_vgg16, build_unet_vgg16_ext
+from .models.unet_vgg16_ext import (
+    AUX_HEAD_WEIGHT_DEEP,
+    AUX_HEAD_WEIGHT_SHALLOW,
+)
 from .splits import load_splits
 from .stats import load_stats
 
@@ -73,6 +77,7 @@ class TrainConfig:
     model: str = "vgg16"               # "vgg16" or "vgg16_ext"
     use_attention_gates: bool = False  # only consulted when model == "vgg16_ext"
     use_transformer_bottleneck: bool = False
+    use_aux_heads: bool = False        # deep supervision; vgg16_ext only
     amp: bool = False                  # mixed precision (fp16 autocast + GradScaler); CUDA-only
 
 
@@ -160,6 +165,33 @@ def build_dataloaders(
 # ---------------------------------------------------------------------------
 
 
+def _compute_loss(
+    output: torch.Tensor | tuple[torch.Tensor, ...],
+    masks: torch.Tensor,
+    criterion: nn.Module,
+) -> torch.Tensor:
+    """Compute loss for either a single-tensor or aux-tuple forward output.
+
+    When the model returns a tuple ``(main, aux_shallow, aux_deep)`` (i.e.
+    deep supervision is active and the model is in training mode), the
+    combined loss matches the README plan::
+
+        L_total = L_main
+                + AUX_HEAD_WEIGHT_SHALLOW * L_aux_shallow
+                + AUX_HEAD_WEIGHT_DEEP    * L_aux_deep
+
+    All three heads predict at full input resolution against the same mask.
+    """
+    if isinstance(output, tuple):
+        main, aux_shallow, aux_deep = output
+        return (
+            criterion(main, masks)
+            + AUX_HEAD_WEIGHT_SHALLOW * criterion(aux_shallow, masks)
+            + AUX_HEAD_WEIGHT_DEEP * criterion(aux_deep, masks)
+        )
+    return criterion(output, masks)
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -174,6 +206,10 @@ def train_one_epoch(
     inside ``torch.amp.autocast(fp16)`` and the backward goes through a
     ``GradScaler``. Both are no-ops when AMP is disabled or the device isn't
     CUDA, so the existing CPU/MPS smoke-test path is unaffected.
+
+    The loss is the main-head CE/Focal by default. If the model returns a
+    deep-supervision tuple ``(main, aux_shallow, aux_deep)``, the three
+    terms are combined with the standard weights via :func:`_compute_loss`.
     """
     model.train()
     use_amp = bool(amp) and device.type == "cuda"
@@ -185,8 +221,8 @@ def train_one_epoch(
         masks = batch["mask"].to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast("cuda", dtype=torch.float16, enabled=use_amp):
-            logits = model(images)
-            loss = criterion(logits, masks)
+            output = model(images)
+            loss = _compute_loss(output, masks, criterion)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -262,6 +298,7 @@ def build_model(cfg: TrainConfig) -> nn.Module:
             encoder_weights=cfg.encoder_weights,
             use_attention_gates=cfg.use_attention_gates,
             use_transformer_bottleneck=cfg.use_transformer_bottleneck,
+            use_aux_heads=cfg.use_aux_heads,
         )
     raise ValueError(
         f"Unknown model {cfg.model!r}; expected one of vgg16, vgg16_ext."
@@ -434,6 +471,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Enable TransformerBottleneck body (model=vgg16_ext only).",
     )
     p.add_argument(
+        "--aux-heads",
+        action="store_true",
+        help="Enable deep-supervision aux heads (model=vgg16_ext only). "
+        "Two 1x1-conv aux heads at decoder mid-levels with weights "
+        f"{AUX_HEAD_WEIGHT_SHALLOW}/{AUX_HEAD_WEIGHT_DEEP}; main head "
+        "weight is 1.0. Aux heads are dropped at inference.",
+    )
+    p.add_argument(
         "--amp",
         action="store_true",
         help="Enable mixed precision (fp16 autocast + GradScaler). CUDA-only; "
@@ -474,6 +519,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         model=args.model,
         use_attention_gates=args.attention_gates,
         use_transformer_bottleneck=args.transformer_bottleneck,
+        use_aux_heads=args.aux_heads,
         amp=args.amp,
     )
 

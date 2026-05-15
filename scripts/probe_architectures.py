@@ -60,10 +60,15 @@ logger = logging.getLogger("probe")
 
 # Order matters: print the table in the order we run them.
 PROBE_CONFIGS: tuple[dict, ...] = (
-    {"tag": "base",      "attention": False, "transformer": False},
-    {"tag": "att",       "attention": True,  "transformer": False},
-    {"tag": "trans",     "attention": False, "transformer": True},
-    {"tag": "att_trans", "attention": True,  "transformer": True},
+    {"tag": "base",      "attention": False, "transformer": False, "aux": False},
+    {"tag": "att",       "attention": True,  "transformer": False, "aux": False},
+    {"tag": "trans",     "attention": False, "transformer": True,  "aux": False},
+    {"tag": "att_trans", "attention": True,  "transformer": True,  "aux": False},
+    # Deep-supervision variants. Aux heads are additive to the other flags,
+    # so any of the four above can be paired with aux=True. We only ship
+    # the most interesting combinations here; pass --configs to include them.
+    {"tag": "trans_aux",     "attention": False, "transformer": True,  "aux": True},
+    {"tag": "att_trans_aux", "attention": True,  "transformer": True,  "aux": True},
 )
 
 
@@ -188,12 +193,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         config_out = base_out / tag
         logger.info("")
         logger.info(
-            "[%d/%d] %s  (attention=%s, transformer=%s)",
+            "[%d/%d] %s  (attention=%s, transformer=%s, aux=%s)",
             i,
             len(selected),
             tag,
             meta["attention"],
             meta["transformer"],
+            meta.get("aux", False),
         )
         logger.info("-" * 78)
 
@@ -214,6 +220,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             model="vgg16_ext",
             use_attention_gates=meta["attention"],
             use_transformer_bottleneck=meta["transformer"],
+            use_aux_heads=meta.get("aux", False),
             amp=args.amp,
         )
 
@@ -254,6 +261,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             "tag": tag,
             "use_attention_gates": meta["attention"],
             "use_transformer_bottleneck": meta["transformer"],
+            "use_aux_heads": meta.get("aux", False),
             "best_val_miou": (
                 round(best_miou, 5) if math.isfinite(best_miou) else float("nan")
             ),
@@ -298,10 +306,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     logger.info("Probe complete in %.1f min", total / 60)
     logger.info("")
     logger.info(
-        "%-10s | %-9s | %-11s | %-9s | %-8s | %s",
-        "config", "attention", "transformer", "best mIoU", "time min", "status",
+        "%-14s | %-9s | %-11s | %-3s | %-9s | %-8s | %s",
+        "config", "attention", "transformer", "aux", "best mIoU", "time min",
+        "status",
     )
-    logger.info("-" * 78)
+    logger.info("-" * 82)
     for r in results:
         miou_str = (
             f"{r['best_val_miou']:.4f}"
@@ -310,10 +319,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             else "  nan "
         )
         logger.info(
-            "%-10s | %-9s | %-11s | %-9s | %8.1f | %s",
+            "%-14s | %-9s | %-11s | %-3s | %-9s | %8.1f | %s",
             r["tag"],
             r["use_attention_gates"],
             r["use_transformer_bottleneck"],
+            r.get("use_aux_heads", False),
             miou_str,
             r["elapsed_s"] / 60,
             r["status"],
