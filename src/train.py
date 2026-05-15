@@ -36,7 +36,7 @@ from .augmentations import MASK_IGNORE_INDEX, build_pipeline
 from .dataset import NUM_CLASSES, MassMINDDataset, make_collate_fn
 from .losses import FocalLoss
 from .metrics import ConfusionMatrixTracker
-from .models import build_unet_vgg16
+from .models import build_unet_vgg16, build_unet_vgg16_ext
 from .splits import load_splits
 from .stats import load_stats
 
@@ -70,6 +70,9 @@ class TrainConfig:
     loss: str                  # "ce" or "focal"
     focal_gamma: float
     focal_alpha: float | None
+    model: str = "vgg16"               # "vgg16" or "vgg16_ext"
+    use_attention_gates: bool = False  # only consulted when model == "vgg16_ext"
+    use_transformer_bottleneck: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +225,27 @@ def build_criterion(cfg: TrainConfig) -> nn.Module:
     raise ValueError(f"Unknown loss {cfg.loss!r}; expected one of ce, focal.")
 
 
+def build_model(cfg: TrainConfig) -> nn.Module:
+    """Build the segmentation model from cfg.model."""
+    if cfg.model == "vgg16":
+        return build_unet_vgg16(
+            num_classes=NUM_CLASSES,
+            in_channels=1,
+            encoder_weights=cfg.encoder_weights,
+        )
+    if cfg.model == "vgg16_ext":
+        return build_unet_vgg16_ext(
+            num_classes=NUM_CLASSES,
+            in_channels=1,
+            encoder_weights=cfg.encoder_weights,
+            use_attention_gates=cfg.use_attention_gates,
+            use_transformer_bottleneck=cfg.use_transformer_bottleneck,
+        )
+    raise ValueError(
+        f"Unknown model {cfg.model!r}; expected one of vgg16, vgg16_ext."
+    )
+
+
 def run_training(cfg: TrainConfig, output_dir: Path) -> None:
     torch.manual_seed(cfg.seed)
 
@@ -238,9 +262,7 @@ def run_training(cfg: TrainConfig, output_dir: Path) -> None:
         mean, std,
     )
 
-    model = build_unet_vgg16(
-        num_classes=NUM_CLASSES, in_channels=1, encoder_weights=cfg.encoder_weights,
-    ).to(device)
+    model = build_model(cfg).to(device)
 
     criterion = build_criterion(cfg)
     optimizer = torch.optim.AdamW(
@@ -370,6 +392,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Scalar alpha for focal loss (None = unweighted).",
     )
     p.add_argument(
+        "--model",
+        choices=["vgg16", "vgg16_ext"],
+        default="vgg16",
+        help="Model variant: SMP VGG16 U-Net (default) or our extended one.",
+    )
+    p.add_argument(
+        "--attention-gates",
+        action="store_true",
+        help="Enable AttentionGate skip refiners (model=vgg16_ext only).",
+    )
+    p.add_argument(
+        "--transformer-bottleneck",
+        action="store_true",
+        help="Enable TransformerBottleneck body (model=vgg16_ext only).",
+    )
+    p.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -401,11 +439,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         loss=args.loss,
         focal_gamma=args.focal_gamma,
         focal_alpha=args.focal_alpha,
+        model=args.model,
+        use_attention_gates=args.attention_gates,
+        use_transformer_bottleneck=args.transformer_bottleneck,
     )
 
     output_dir = args.output_dir or (
         DEFAULT_OUTPUT_DIR
-        / f"unet_vgg16_aug{args.augmentation}_{args.loss}_{int(time.time())}"
+        / f"{args.model}_aug{args.augmentation}_{args.loss}_{int(time.time())}"
     )
     run_training(cfg, output_dir)
     return 0

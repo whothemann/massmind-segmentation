@@ -1,6 +1,5 @@
 # MassMIND Segmentation
 
-Next step: implement focal loss (maybe focal loss and dice loss combined)
 
 Semantic segmentation of long-wave infrared (LWIR) maritime imagery from the
 [MassMIND dataset](https://github.com/uml-marine-robotics/MassMIND) (Nirgudkar
