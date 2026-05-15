@@ -109,6 +109,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip ImageNet weights for the VGG16 encoder.",
     )
     p.add_argument(
+        "--amp",
+        dest="amp",
+        action="store_true",
+        default=True,
+        help="Enable AMP (mixed precision) for CUDA. Default ON for the probe.",
+    )
+    p.add_argument(
+        "--no-amp",
+        dest="amp",
+        action="store_false",
+        help="Force FP32 (overrides --amp). Use for byte-identical numerics "
+        "with the FP32 baseline.",
+    )
+    p.add_argument(
         "--num-workers",
         type=int,
         default=-1,
@@ -154,7 +168,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     logger.info("=" * 78)
     logger.info(
         "Architecture probe: %d config(s)  device=%s  epochs=%d  subset=%s  "
-        "batch=%d  loss=%s  aug=%s",
+        "batch=%d  loss=%s  aug=%s  amp=%s",
         len(selected),
         device,
         args.epochs,
@@ -162,6 +176,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.batch_size,
         args.loss,
         args.augmentation,
+        args.amp,
     )
     logger.info("Output: %s", base_out)
     logger.info("=" * 78)
@@ -199,6 +214,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             model="vgg16_ext",
             use_attention_gates=meta["attention"],
             use_transformer_bottleneck=meta["transformer"],
+            amp=args.amp,
         )
 
         t0 = time.time()
@@ -271,6 +287,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             "augmentation": args.augmentation,
             "encoder_weights": encoder_weights,
             "seed": args.seed,
+            "amp": args.amp,
         },
         "results": results,
     }

@@ -73,6 +73,7 @@ class TrainConfig:
     model: str = "vgg16"               # "vgg16" or "vgg16_ext"
     use_attention_gates: bool = False  # only consulted when model == "vgg16_ext"
     use_transformer_bottleneck: bool = False
+    amp: bool = False                  # mixed precision (fp16 autocast + GradScaler); CUDA-only
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +166,30 @@ def train_one_epoch(
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    amp: bool = False,
 ) -> float:
+    """One training epoch.
+
+    When ``amp=True`` and ``device.type == "cuda"``, the forward + loss run
+    inside ``torch.amp.autocast(fp16)`` and the backward goes through a
+    ``GradScaler``. Both are no-ops when AMP is disabled or the device isn't
+    CUDA, so the existing CPU/MPS smoke-test path is unaffected.
+    """
     model.train()
+    use_amp = bool(amp) and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     running_loss = 0.0
     n_samples = 0
     for batch in loader:
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
-        logits = model(images)
-        loss = criterion(logits, masks)
-        loss.backward()
-        optimizer.step()
+        with torch.amp.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+            logits = model(images)
+            loss = criterion(logits, masks)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         bs = images.size(0)
         running_loss += float(loss.detach()) * bs
         n_samples += bs
@@ -189,16 +202,25 @@ def evaluate(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    amp: bool = False,
 ) -> tuple[float, ConfusionMatrixTracker]:
+    """Evaluation pass.
+
+    Wraps forward + loss in ``torch.amp.autocast`` when AMP is requested
+    on a CUDA device. The argmax + confusion matrix run in FP32 regardless,
+    so the IoU metric is unaffected by autocast precision.
+    """
     model.eval()
+    use_amp = bool(amp) and device.type == "cuda"
     tracker = ConfusionMatrixTracker(NUM_CLASSES, ignore_index=MASK_IGNORE_INDEX)
     running_loss = 0.0
     n_samples = 0
     for batch in loader:
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
-        logits = model(images)
-        loss = criterion(logits, masks)
+        with torch.amp.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+            logits = model(images)
+            loss = criterion(logits, masks)
         preds = logits.argmax(dim=1)
         tracker.update(pred=preds, target=masks)
         bs = images.size(0)
@@ -285,8 +307,12 @@ def run_training(cfg: TrainConfig, output_dir: Path) -> None:
     best_miou = -1.0
     for epoch in range(1, cfg.epochs + 1):
         t0 = time.time()
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, tracker = evaluate(model, val_loader, criterion, device)
+        train_loss = train_one_epoch(
+            model, train_loader, criterion, optimizer, device, amp=cfg.amp,
+        )
+        val_loss, tracker = evaluate(
+            model, val_loader, criterion, device, amp=cfg.amp,
+        )
         result = tracker.compute()
         scheduler.step()
         elapsed = time.time() - t0
@@ -408,6 +434,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Enable TransformerBottleneck body (model=vgg16_ext only).",
     )
     p.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable mixed precision (fp16 autocast + GradScaler). CUDA-only; "
+        "no-op on CPU/MPS. Off by default to preserve baseline numerics.",
+    )
+    p.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -442,6 +474,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         model=args.model,
         use_attention_gates=args.attention_gates,
         use_transformer_bottleneck=args.transformer_bottleneck,
+        amp=args.amp,
     )
 
     output_dir = args.output_dir or (
