@@ -59,6 +59,8 @@ logger = logging.getLogger("probe")
 
 
 # Order matters: print the table in the order we run them.
+# Each entry is a vgg16_ext variant (attention/transformer/aux flags) except
+# ``custom_lwir`` which selects a different model class entirely.
 PROBE_CONFIGS: tuple[dict, ...] = (
     {"tag": "base",      "attention": False, "transformer": False, "aux": False},
     {"tag": "att",       "attention": True,  "transformer": False, "aux": False},
@@ -69,6 +71,17 @@ PROBE_CONFIGS: tuple[dict, ...] = (
     # the most interesting combinations here; pass --configs to include them.
     {"tag": "trans_aux",     "attention": False, "transformer": True,  "aux": True},
     {"tag": "att_trans_aux", "attention": True,  "transformer": True,  "aux": True},
+    # From-scratch custom architecture (DSConv + GroupNorm + SiLU +
+    # Transformer bottleneck + aux heads). Different model class -- the
+    # attention/transformer flags on the row are unused (the architecture
+    # bakes those decisions in).
+    {
+        "tag": "custom_lwir",
+        "attention": False,
+        "transformer": True,
+        "aux": True,
+        "model": "custom_lwir",
+    },
 )
 
 
@@ -203,6 +216,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         logger.info("-" * 78)
 
+        model_name = meta.get("model", "vgg16_ext")
+        # custom_lwir is always from scratch -- the encoder_weights field on
+        # cfg is unused for that model class. Default warmup_frac=0.05 for
+        # from-scratch configs mirrors the train.py CLI auto-default so the
+        # probe results match a standalone training run.
+        is_from_scratch = (model_name == "custom_lwir") or (encoder_weights is None)
         cfg = TrainConfig(
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -217,11 +236,13 @@ def main(argv: Iterable[str] | None = None) -> int:
             loss=args.loss,
             focal_gamma=args.focal_gamma,
             focal_alpha=args.focal_alpha,
-            model="vgg16_ext",
+            model=model_name,
             use_attention_gates=meta["attention"],
             use_transformer_bottleneck=meta["transformer"],
             use_aux_heads=meta.get("aux", False),
             amp=args.amp,
+            warmup_frac=0.05 if is_from_scratch else 0.0,
+            warmup_auto_set=True,
         )
 
         t0 = time.time()
