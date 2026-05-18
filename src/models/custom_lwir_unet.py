@@ -20,28 +20,28 @@ the 2015 U-Net:
   per-block FLOP and parameter cost dramatically without changing the
   receptive field.
 
-Architecture (with defaults: stem_channels=32, multipliers (1,2,4,8,8)):
+Architecture (with defaults: stem_channels=48, multipliers (1,2,4,8,8)):
 
     [B, 1, H, W]
         |-- Stem (full res)
-        |    StandardConvBlock(1 -> 32)
-        |    StandardConvBlock(32 -> 32)             -> skip[0]
+        |    StandardConvBlock(1 -> 48)
+        |    StandardConvBlock(48 -> 48)             -> skip[0]
         |-- Encoder
-        |    MaxPool2x2 + DoubleDSConv(32 -> 64)     -> skip[1] (stride 2)
-        |    MaxPool2x2 + DoubleDSConv(64 -> 128)    -> skip[2] (stride 4)
-        |    MaxPool2x2 + DoubleDSConv(128 -> 256)   -> skip[3] (stride 8)
-        |    MaxPool2x2 + DoubleDSConv(256 -> 256)   -> bottleneck in (stride 16)
+        |    MaxPool2x2 + DoubleDSConv(48 -> 96)     -> skip[1] (stride 2)
+        |    MaxPool2x2 + DoubleDSConv(96 -> 192)    -> skip[2] (stride 4)
+        |    MaxPool2x2 + DoubleDSConv(192 -> 384)   -> skip[3] (stride 8)
+        |    MaxPool2x2 + DoubleDSConv(384 -> 384)   -> bottleneck in (stride 16)
         |-- Bottleneck (no pool)
-        |    TransformerBottleneck(256, layers=2, heads=8, spatial=16)
+        |    TransformerBottleneck(384, layers=2, heads=8, spatial=16)
         |-- Decoder
-        |    ConvT(256 -> 256) + concat skip[3] + DoubleDSConv(512 -> 256)
-        |    ConvT(256 -> 128) + concat skip[2] + DoubleDSConv(256 -> 128) -> aux_deep
-        |    ConvT(128 -> 64)  + concat skip[1] + DoubleDSConv(128 -> 64)  -> aux_shallow
-        |    ConvT(64  -> 32)  + concat skip[0] + DoubleDSConv(64  -> 32)
+        |    ConvT(384 -> 384) + concat skip[3] + DoubleDSConv(768 -> 384)
+        |    ConvT(384 -> 192) + concat skip[2] + DoubleDSConv(384 -> 192) -> aux_deep
+        |    ConvT(192 -> 96)  + concat skip[1] + DoubleDSConv(192 -> 96)  -> aux_shallow
+        |    ConvT(96  -> 48)  + concat skip[0] + DoubleDSConv(96  -> 48)
         |-- Heads
-             OutConv 1x1 (32 -> num_classes)               (main)
-             OutConv 1x1 (128 -> num_classes) + bilinear up (aux_deep,    w=0.2)
-             OutConv 1x1 (64  -> num_classes) + bilinear up (aux_shallow, w=0.4)
+             OutConv 1x1 (48 -> num_classes)               (main)
+             OutConv 1x1 (192 -> num_classes) + bilinear up (aux_deep,    w=0.2)
+             OutConv 1x1 (96  -> num_classes) + bilinear up (aux_shallow, w=0.4)
 
 The aux heads only contribute in training mode -- in eval the forward returns
 just the main logits, so the model is byte-identical to the no-aux variant
@@ -135,7 +135,7 @@ class CustomLWIRUNet(nn.Module):
         self,
         num_classes: int = 7,
         in_channels: int = 1,
-        stem_channels: int = 32,
+        stem_channels: int = 48,
         channel_multipliers: tuple[int, ...] = DEFAULT_CHANNEL_MULTIPLIERS,
         transformer_layers: int = 2,
         transformer_heads: int = 8,
@@ -311,7 +311,7 @@ def _count_params(module: nn.Module) -> int:
 def build_custom_lwir_unet(
     num_classes: int = 7,
     in_channels: int = 1,
-    stem_channels: int = 32,
+    stem_channels: int = 48,
     channel_multipliers: tuple[int, ...] = DEFAULT_CHANNEL_MULTIPLIERS,
     transformer_layers: int = 2,
     transformer_heads: int = 8,

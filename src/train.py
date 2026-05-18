@@ -86,7 +86,7 @@ class TrainConfig:
     use_aux_heads: bool = False        # deep supervision; vgg16_ext & custom_lwir
     amp: bool = False                  # mixed precision (fp16 autocast + GradScaler); CUDA-only
     # custom_lwir-specific overrides (no-ops for other model types):
-    stem_channels: int = 32
+    stem_channels: int = 48
     transformer_layers: int = 2
     # LR-schedule warmup as a fraction of total training steps. 0.0 = pure
     # cosine (current behaviour, preserved for the pretrained baseline);
@@ -564,8 +564,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--stem-channels",
         type=int,
-        default=32,
-        help="custom_lwir only: channels out of the stem (default 32).",
+        default=48,
+        help="custom_lwir only: channels out of the stem (default 48).",
     )
     p.add_argument(
         "--transformer-layers",

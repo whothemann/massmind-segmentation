@@ -70,13 +70,13 @@ def test_forward_shape_train_mode_no_aux_returns_tensor() -> None:
 def test_parameter_count_regression() -> None:
     model = build_custom_lwir_unet(num_classes=7, use_aux_heads=True)
     n_params = sum(p.numel() for p in model.parameters())
-    # Sanity bounds. DSConv-heavy U-Net + 256-ch transformer bottleneck
-    # lands at ~2.12 M params with the spec defaults (stem 32, multipliers
-    # (1,2,4,8,8), 2 transformer layers). Measured exactly = 2_120_437. If
+    # Sanity bounds. DSConv-heavy U-Net + 384-ch transformer bottleneck
+    # lands at ~4.69 M params with the spec defaults (stem 48, multipliers
+    # (1,2,4,8,8), 2 transformer layers). Measured exactly = 4_690_533. If
     # a future edit accidentally swaps DSConv -> standard conv in the
-    # encoder/decoder, the count would jump well above 4M and fail this
+    # encoder/decoder, the count would jump well above 8M and fail this
     # test.
-    assert 2_000_000 < n_params < 2_300_000, f"got {n_params} params"
+    assert 4_500_000 < n_params < 4_900_000, f"got {n_params} params"
 
 
 def test_parameter_count_aux_heads_overhead_is_small() -> None:
@@ -280,7 +280,7 @@ def test_rejects_wrong_channel_multiplier_count() -> None:
 
 
 def test_rejects_indivisible_transformer_heads() -> None:
-    # Default deepest width is stem_channels * 8 = 256; with 7 heads that's
+    # Default deepest width is stem_channels * 8 = 384; with 7 heads that's
     # not divisible -> ValueError.
     with pytest.raises(ValueError):
         build_custom_lwir_unet(transformer_heads=7)
