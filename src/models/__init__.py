@@ -4,9 +4,13 @@
 * :func:`build_custom_unet` -- hand-implemented from-scratch U-Net basis.
 * :func:`build_unet_vgg16_ext` -- VGG-16 encoder + custom decoder with
   swappable AttentionGate / TransformerBottleneck seams.
+* :func:`build_custom_lwir_unet` -- modern from-scratch U-Net designed for
+  1-channel LWIR (SiLU + GroupNorm + Depthwise-Separable + Transformer
+  bottleneck + deep-supervision aux heads).
 """
 from __future__ import annotations
 
+from .custom_lwir_unet import CustomLWIRUNet, build_custom_lwir_unet
 from .custom_unet import CustomUNet, build_custom_unet
 from .unet import build_unet_vgg16
 from .unet_vgg16_ext import VGG16UNetExt, build_unet_vgg16_ext
@@ -17,4 +21,6 @@ __all__ = [
     "CustomUNet",
     "build_unet_vgg16_ext",
     "VGG16UNetExt",
+    "build_custom_lwir_unet",
+    "CustomLWIRUNet",
 ]

@@ -21,10 +21,12 @@ import argparse
 import csv
 import json
 import logging
+import os
 import platform
 import sys
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -36,7 +38,11 @@ from .augmentations import MASK_IGNORE_INDEX, build_pipeline
 from .dataset import NUM_CLASSES, MassMINDDataset, make_collate_fn
 from .losses import FocalLoss
 from .metrics import ConfusionMatrixTracker
-from .models import build_unet_vgg16, build_unet_vgg16_ext
+from .models import (
+    build_custom_lwir_unet,
+    build_unet_vgg16,
+    build_unet_vgg16_ext,
+)
 from .models.unet_vgg16_ext import (
     AUX_HEAD_WEIGHT_DEEP,
     AUX_HEAD_WEIGHT_SHALLOW,
@@ -74,11 +80,19 @@ class TrainConfig:
     loss: str                  # "ce" or "focal"
     focal_gamma: float
     focal_alpha: float | None
-    model: str = "vgg16"               # "vgg16" or "vgg16_ext"
+    model: str = "vgg16"               # "vgg16", "vgg16_ext", or "custom_lwir"
     use_attention_gates: bool = False  # only consulted when model == "vgg16_ext"
     use_transformer_bottleneck: bool = False
-    use_aux_heads: bool = False        # deep supervision; vgg16_ext only
+    use_aux_heads: bool = False        # deep supervision; vgg16_ext & custom_lwir
     amp: bool = False                  # mixed precision (fp16 autocast + GradScaler); CUDA-only
+    # custom_lwir-specific overrides (no-ops for other model types):
+    stem_channels: int = 32
+    transformer_layers: int = 2
+    # LR-schedule warmup as a fraction of total training steps. 0.0 = pure
+    # cosine (current behaviour, preserved for the pretrained baseline);
+    # 0.05 default-on for from-scratch configs (custom_lwir or --no-pretrained).
+    warmup_frac: float = 0.0
+    warmup_auto_set: bool = False      # True if warmup_frac was auto-defaulted (for logging)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +213,8 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     amp: bool = False,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    step_scheduler_per_batch: bool = False,
 ) -> float:
     """One training epoch.
 
@@ -210,6 +226,11 @@ def train_one_epoch(
     The loss is the main-head CE/Focal by default. If the model returns a
     deep-supervision tuple ``(main, aux_shallow, aux_deep)``, the three
     terms are combined with the standard weights via :func:`_compute_loss`.
+
+    If ``scheduler`` is provided and ``step_scheduler_per_batch`` is True,
+    the scheduler advances once per batch (needed for SequentialLR with
+    LinearLR warmup, which counts ``total_iters`` in steps, not epochs).
+    Otherwise the caller is expected to step the scheduler once per epoch.
     """
     model.train()
     use_amp = bool(amp) and device.type == "cuda"
@@ -226,6 +247,8 @@ def train_one_epoch(
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+        if scheduler is not None and step_scheduler_per_batch:
+            scheduler.step()
         bs = images.size(0)
         running_loss += float(loss.detach()) * bs
         n_samples += bs
@@ -300,16 +323,86 @@ def build_model(cfg: TrainConfig) -> nn.Module:
             use_transformer_bottleneck=cfg.use_transformer_bottleneck,
             use_aux_heads=cfg.use_aux_heads,
         )
+    if cfg.model == "custom_lwir":
+        return build_custom_lwir_unet(
+            num_classes=NUM_CLASSES,
+            in_channels=1,
+            stem_channels=cfg.stem_channels,
+            transformer_layers=cfg.transformer_layers,
+            use_aux_heads=cfg.use_aux_heads,
+        )
     raise ValueError(
-        f"Unknown model {cfg.model!r}; expected one of vgg16, vgg16_ext."
+        f"Unknown model {cfg.model!r}; expected one of vgg16, vgg16_ext, "
+        "custom_lwir."
     )
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    cfg: TrainConfig,
+    steps_per_epoch: int,
+) -> tuple[torch.optim.lr_scheduler.LRScheduler, bool]:
+    """Build the LR schedule and report its stepping cadence.
+
+    Returns a tuple ``(scheduler, step_per_batch)``:
+
+    * ``warmup_frac == 0.0`` -> plain ``CosineAnnealingLR`` (T_max = epochs),
+      stepped once per epoch. This is byte-identical to the pre-warmup
+      behaviour, so the pretrained-VGG16 baseline numerics don't drift.
+    * ``warmup_frac > 0.0``  -> ``SequentialLR([LinearLR, CosineAnnealingLR])``
+      stepped once per batch. LinearLR ramps from ``base_lr * 1e-3`` to
+      ``base_lr`` over the warmup window (PyTorch's ``LinearLR`` requires
+      ``start_factor > 0``, so we use 1e-3 rather than literal 0).
+    """
+    if cfg.warmup_frac <= 0.0:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cfg.epochs
+        )
+        logger.info(
+            "LR schedule: warmup_frac=0.0 (no warmup), cosine over %d epochs",
+            cfg.epochs,
+        )
+        return scheduler, False
+
+    total_steps = max(cfg.epochs * steps_per_epoch, 1)
+    warmup_steps = max(int(round(cfg.warmup_frac * total_steps)), 1)
+    cosine_steps = max(total_steps - warmup_steps, 1)
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-3,
+        end_factor=1.0,
+        total_iters=warmup_steps,
+    )
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cosine_steps
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps]
+    )
+    origin = "auto-set for from-scratch config" if cfg.warmup_auto_set else "user-specified"
+    logger.info(
+        "LR schedule: warmup_frac=%.3f (%s), total_steps=%d, "
+        "warmup_steps=%d, then cosine to 0 over %d steps",
+        cfg.warmup_frac,
+        origin,
+        total_steps,
+        warmup_steps,
+        cosine_steps,
+    )
+    return scheduler, True
 
 
 def run_training(cfg: TrainConfig, output_dir: Path) -> None:
     torch.manual_seed(cfg.seed)
 
     device = torch.device(cfg.device)
-    logger.info("Device: %s", device)
+    visible_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    logger.info(
+        "Training on device=%s, visible_gpus=%d, CUDA_VISIBLE_DEVICES=%s",
+        device,
+        visible_gpus,
+        os.environ.get("CUDA_VISIBLE_DEVICES", "unset"),
+    )
 
     train_loader, val_loader, mean, std = build_dataloaders(
         cfg, DEFAULT_DATA_ROOT, DEFAULT_SPLIT_PATH, DEFAULT_STATS_PATH,
@@ -327,7 +420,9 @@ def run_training(cfg: TrainConfig, output_dir: Path) -> None:
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs)
+    scheduler, step_scheduler_per_batch = build_scheduler(
+        optimizer, cfg, steps_per_epoch=len(train_loader)
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
@@ -346,12 +441,17 @@ def run_training(cfg: TrainConfig, output_dir: Path) -> None:
         t0 = time.time()
         train_loss = train_one_epoch(
             model, train_loader, criterion, optimizer, device, amp=cfg.amp,
+            scheduler=scheduler,
+            step_scheduler_per_batch=step_scheduler_per_batch,
         )
         val_loss, tracker = evaluate(
             model, val_loader, criterion, device, amp=cfg.amp,
         )
         result = tracker.compute()
-        scheduler.step()
+        # SequentialLR (warmup path) is stepped per batch inside the train
+        # loop; the plain cosine schedule (no-warmup path) ticks per epoch.
+        if not step_scheduler_per_batch:
+            scheduler.step()
         elapsed = time.time() - t0
 
         row = {
@@ -456,9 +556,31 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--model",
-        choices=["vgg16", "vgg16_ext"],
+        choices=["vgg16", "vgg16_ext", "custom_lwir"],
         default="vgg16",
-        help="Model variant: SMP VGG16 U-Net (default) or our extended one.",
+        help="Model variant: SMP VGG16 U-Net (default), our extended VGG16, "
+        "or the from-scratch CustomLWIRUNet.",
+    )
+    p.add_argument(
+        "--stem-channels",
+        type=int,
+        default=32,
+        help="custom_lwir only: channels out of the stem (default 32).",
+    )
+    p.add_argument(
+        "--transformer-layers",
+        type=int,
+        default=2,
+        help="custom_lwir only: number of TransformerEncoder layers in the "
+        "bottleneck (default 2).",
+    )
+    p.add_argument(
+        "--warmup-frac",
+        type=float,
+        default=None,
+        help="Linear LR warmup as a fraction of total training steps. "
+        "If unset: 0.05 for custom_lwir or --no-pretrained (from-scratch "
+        "configs), else 0.0 (pure cosine, preserves baseline behaviour).",
     )
     p.add_argument(
         "--attention-gates",
@@ -502,6 +624,27 @@ def main(argv: Iterable[str] | None = None) -> int:
     device = autodetect_device(args.device)
     num_workers = autodetect_num_workers(device, args.num_workers)
 
+    # --no-pretrained sanity check. custom_lwir is always trained from scratch,
+    # so combining the two flags is harmless but misleading; warn so the run
+    # config in config.json doesn't confuse a future reader.
+    if args.no_pretrained and args.model == "custom_lwir":
+        logger.warning(
+            "--no-pretrained is a no-op for --model custom_lwir "
+            "(this architecture has no pretrained option). Ignoring."
+        )
+
+    # Auto-default warmup_frac. The pretrained baseline keeps pure cosine
+    # (preserves prior numerics exactly); from-scratch configs get 5% warmup
+    # because the Transformer bottleneck on small datasets is sensitive to
+    # early-epoch LR shocks.
+    if args.warmup_frac is None:
+        is_from_scratch = (args.model == "custom_lwir") or args.no_pretrained
+        warmup_frac = 0.05 if is_from_scratch else 0.0
+        warmup_auto_set = True
+    else:
+        warmup_frac = float(args.warmup_frac)
+        warmup_auto_set = False
+
     cfg = TrainConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -521,11 +664,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         use_transformer_bottleneck=args.transformer_bottleneck,
         use_aux_heads=args.aux_heads,
         amp=args.amp,
+        stem_channels=args.stem_channels,
+        transformer_layers=args.transformer_layers,
+        warmup_frac=warmup_frac,
+        warmup_auto_set=warmup_auto_set,
     )
 
+    # Run isolation: include the PID in the default output dir name. This
+    # prevents collisions when two parallel sessions (one per GPU) start
+    # within the same second on a multi-GPU machine.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = args.output_dir or (
         DEFAULT_OUTPUT_DIR
-        / f"{args.model}_aug{args.augmentation}_{args.loss}_{int(time.time())}"
+        / f"{args.model}_{args.loss}_{timestamp}_pid{os.getpid()}"
     )
     run_training(cfg, output_dir)
     return 0

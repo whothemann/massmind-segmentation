@@ -60,7 +60,27 @@ def build_unet_vgg16(
 
     if in_channels == 1:
         first_conv = _get_first_conv(model)
-        new_conv = adapt_conv_to_one_channel(first_conv)
+        if encoder_weights is None:
+            # Random init: channel-mean adaptation is meaningless (it would
+            # just average noise into more noise) AND it discards the SMP
+            # encoder's default random init scale. Replace with a fresh
+            # 1-channel Conv2d of the same shape so random init runs on the
+            # actual single-channel kernel.
+            new_conv = nn.Conv2d(
+                in_channels=1,
+                out_channels=first_conv.out_channels,
+                kernel_size=first_conv.kernel_size,
+                stride=first_conv.stride,
+                padding=first_conv.padding,
+                dilation=first_conv.dilation,
+                bias=first_conv.bias is not None,
+            )
+            logger.info(
+                "Replaced first conv with fresh 1-channel init (no pretrained "
+                "weights to adapt)."
+            )
+        else:
+            new_conv = adapt_conv_to_one_channel(first_conv)
         replace_module(model, _VGG16_FIRST_CONV_PATH, new_conv)
 
     n_params = sum(p.numel() for p in model.parameters())
